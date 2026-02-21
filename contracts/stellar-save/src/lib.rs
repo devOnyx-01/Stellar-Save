@@ -10,12 +10,15 @@
 //! - The process rotates until all members have received a payout
 //! 
 //! ## Modules
+//! - `events`: Event types for contract state change tracking
 //! - `group`: Core Group data structure and state management
 //! - `payout`: Payout record tracking for fund distributions
 
+pub mod events;
 pub mod group;
 pub mod payout;
 
 // Re-export for convenience
+pub use events::*;
 pub use group::Group;
 pub use payout::PayoutRecord;
