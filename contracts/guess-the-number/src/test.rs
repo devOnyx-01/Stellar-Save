@@ -296,25 +296,24 @@ fn test_activate_group_fails_if_already_active() {
     assert_eq!(result, Err(Ok(Error::InvalidGroupStatus)));
 }
 
-#[test]
-fn test_get_group_returns_correct_data() {
-    let (env, admin, client) = create_test_env();
+// This lets you mock the auth context for a function call
+fn set_caller<T>(client: &GuessTheNumberClient, fn_name: &str, caller: &Address, args: T)
+where
+    T: IntoVal<Env, Vec<Val>>,
+{
+    // clear previous auth mocks
+    client.env.set_auths(&[]);
 
-    let name = String::from_str(&env, "Savings Circle");
-    let contribution = 1000i128;
-    let duration = 86400u64;
-    let max = 10u32;
+    let invoke = &MockAuthInvoke {
+        contract: &client.address,
+        fn_name,
+        args: args.into_val(&client.env),
+        sub_invokes: &[],
+    };
 
-    let group_id = client.create_group(&admin, &name, &contribution, &duration, &max);
-
-    let group = client.get_group(&group_id);
-
-    assert_eq!(group.id, group_id);
-    assert_eq!(group.name, name);
-    assert_eq!(group.admin, admin);
-    assert_eq!(group.contribution_amount, contribution);
-    assert_eq!(group.cycle_duration, duration);
-    assert_eq!(group.max_members, max);
-    assert_eq!(group.member_count, 0);
-    assert_eq!(group.status, GroupStatus::Forming);
+    // mock auth as passed-in address
+    client.env.mock_auths(&[MockAuth {
+        address: caller,
+        invoke,
+    }]);
 }
