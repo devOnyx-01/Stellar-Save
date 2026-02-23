@@ -133,6 +133,9 @@ impl StellarSaveError {
             StellarSaveError::DataCorruption => {
                 "Contract data appears to be corrupted. This is a critical error."
             }
+            StellarSaveError::Overflow => {
+                "The ID counter has reached its maximum limit. No more IDs can be generated."
+            }
         }
     }
     
@@ -153,14 +156,6 @@ impl StellarSaveError {
             4000..=4999 => ErrorCategory::Payout,
             9000..=9999 => ErrorCategory::System,
             _ => ErrorCategory::Unknown,
-        }
-    }
-    
-    pub fn message(&self) -> &'static str {
-    match self {
-        // ... existing matches ...
-        StellarSaveError::Overflow => {
-            "The ID counter has reached its maximum limit. No more IDs can be generated."
         }
     }
 }
