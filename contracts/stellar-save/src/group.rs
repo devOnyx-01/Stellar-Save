@@ -155,11 +155,14 @@ pub struct Group {
 
     /// Status of the group (Active or Completed).
     /// Replaces is_active for more explicit state management.
-    pub status: Status,
+    pub status: GroupStatus,
 
     /// Timestamp when the group was created (Unix timestamp in seconds).
     /// Used for tracking group age and calculating cycle deadlines.
     pub created_at: u64,
+
+    /// Whether the group has been started (first cycle activated).
+    pub started: bool,
 
     /// Timestamp when the group was activated (Unix timestamp in seconds).
     /// Used for tracking when the first cycle started.
@@ -235,8 +238,9 @@ impl Group {
             member_count: 0,
             current_cycle: 0,
             is_active: true,
-            status: Status::Active,
+            status: GroupStatus::Active,
             created_at,
+            started: false,
             started_at: 0,
         }
     }
@@ -245,7 +249,7 @@ impl Group {
     /// A group is complete when current_cycle equals max_members
     /// or when status is Completed.
     pub fn is_complete(&self) -> bool {
-        self.current_cycle >= self.max_members || self.status == Status::Completed
+        self.current_cycle >= self.max_members || self.status == GroupStatus::Completed
     }
 
     /// Marks the group as completed.
@@ -257,9 +261,9 @@ impl Group {
     /// 
     /// # Panics
     /// Panics if the group is already complete.
-    pub fn complete(&mut self, env: &Env) {
+    pub fn complete(&mut self, env: &soroban_sdk::Env) {
         assert!(!self.is_complete(), "group is already complete");
-        self.status = Status::Completed;
+        self.status = GroupStatus::Completed;
         self.is_active = false;
         
         // Emit completion event
@@ -271,9 +275,9 @@ impl Group {
     /// # Arguments
     /// * `env` - Soroban environment
     /// * `group_id` - The ID of the completed group
-    fn emit_completed_event(env: &Env, group_id: u64) {
+    fn emit_completed_event(env: &soroban_sdk::Env, group_id: u64) {
         env.events().publish(
-            (Symbol::new(env, "group_completed"),),
+            (soroban_sdk::Symbol::new(env, "group_completed"),),
             group_id,
         );
     }
@@ -287,13 +291,13 @@ impl Group {
     /// 
     /// # Panics
     /// Panics if the group is already complete.
-    pub fn advance_cycle(&mut self, env: &Env) {
+    pub fn advance_cycle(&mut self, env: &soroban_sdk::Env) {
         assert!(!self.is_complete(), "group is already complete");
         self.current_cycle += 1;
         
         // Mark as complete if we've reached the final cycle
         if self.is_complete() {
-            self.status = Status::Completed;
+            self.status = GroupStatus::Completed;
             self.is_active = false;
             
             // Emit completion event
@@ -313,7 +317,7 @@ impl Group {
     pub fn reactivate(&mut self) {
         assert!(!self.is_complete(), "cannot reactivate a completed group");
         self.is_active = true;
-        self.status = Status::Active;
+        self.status = GroupStatus::Active;
     }
 
     /// Activates the group (starts the first cycle) once minimum members have joined.
@@ -363,33 +367,10 @@ impl Group {
             && self.current_cycle <= self.max_members
     }
 
-    /// Calculates aggregated statistics for this group.
-    /// 
-    /// # Arguments
-    /// * `total_contributed` - Total amount contributed by all members
-    /// * `total_paid_out` - Total amount paid out to members
-    /// * `active_members` - Number of currently active members
-    /// 
-    /// Returns a GroupStats struct with the calculated values.
-    pub fn calculate_stats(
-        &self,
-        total_contributed: i128,
-        total_paid_out: i128,
-        active_members: u32,
-    ) -> GroupStats {
-        // Calculate completion percentage based on cycles completed
-        let completion_percentage = if self.max_members > 0 {
-            ((self.current_cycle as u64 * 100) / self.max_members as u64) as u32
-        } else {
-            0
-        };
-
-        GroupStats {
-            total_contributed,
-            total_paid_out,
-            active_members,
-            completion_percentage,
-        }
+    /// Adds a member to the group.
+    /// Increments the member_count.
+    pub fn add_member(&mut self) {
+        self.member_count += 1;
     }
 }
 
@@ -422,7 +403,7 @@ mod tests {
         assert_eq!(group.member_count, 0);
         assert_eq!(group.current_cycle, 0);
         assert_eq!(group.is_active, true);
-        assert_eq!(group.status, Status::Active);
+        assert_eq!(group.status, GroupStatus::Active);
         assert_eq!(group.created_at, 1234567890);
     }
 
@@ -496,22 +477,22 @@ mod tests {
         
         assert_eq!(group.current_cycle, 0);
         assert!(group.is_active);
-        assert_eq!(group.status, Status::Active);
+        assert_eq!(group.status, GroupStatus::Active);
         
         group.advance_cycle(&env);
         assert_eq!(group.current_cycle, 1);
         assert!(group.is_active);
-        assert_eq!(group.status, Status::Active);
+        assert_eq!(group.status, GroupStatus::Active);
         
         group.advance_cycle(&env);
         assert_eq!(group.current_cycle, 2);
         assert!(group.is_active);
-        assert_eq!(group.status, Status::Active);
+        assert_eq!(group.status, GroupStatus::Active);
         
         group.advance_cycle(&env);
         assert_eq!(group.current_cycle, 3);
         assert!(!group.is_active); // Auto-deactivated when complete
-        assert_eq!(group.status, Status::Completed); // Status set to Completed
+        assert_eq!(group.status, GroupStatus::Completed); // Status set to Completed
     }
 
     #[test]
@@ -534,15 +515,15 @@ mod tests {
         let mut group = Group::new(1, creator, 10_000_000, 604800, 3, 2, 1234567890);
         
         assert!(group.is_active);
-        assert_eq!(group.status, Status::Active);
+        assert_eq!(group.status, GroupStatus::Active);
         
         group.deactivate();
         assert!(!group.is_active);
-        assert_eq!(group.status, Status::Active); // Status remains Active when just deactivated
+        assert_eq!(group.status, GroupStatus::Active); // Status remains Active when just deactivated
         
         group.reactivate();
         assert!(group.is_active);
-        assert_eq!(group.status, Status::Active);
+        assert_eq!(group.status, GroupStatus::Active);
     }
 
     #[test]
@@ -550,10 +531,10 @@ mod tests {
         let env = Env::default();
         let creator = Address::generate(&env);
         
-        let mut group = Group::new(1, creator, 10_000_000, 604800, 3, 1234567890);
+        let mut group = Group::new(1, creator, 10_000_000, 604800, 3, 2, 1234567890);
         
         // Group starts as Active
-        assert_eq!(group.status, Status::Active);
+        assert_eq!(group.status, GroupStatus::Active);
         assert!(group.is_active);
         assert!(!group.is_complete());
         
@@ -561,7 +542,7 @@ mod tests {
         group.complete(&env);
         
         // Verify group is marked as completed
-        assert_eq!(group.status, Status::Completed);
+        assert_eq!(group.status, GroupStatus::Completed);
         assert!(!group.is_active);
         assert!(group.is_complete());
     }
@@ -572,7 +553,7 @@ mod tests {
         let env = Env::default();
         let creator = Address::generate(&env);
         
-        let mut group = Group::new(1, creator, 10_000_000, 604800, 2, 1234567890);
+        let mut group = Group::new(1, creator, 10_000_000, 604800, 2, 2, 1234567890);
         group.current_cycle = 2; // Already complete via cycle advancement
         
         group.complete(&env); // Should panic
@@ -583,13 +564,13 @@ mod tests {
         let env = Env::default();
         let creator = Address::generate(&env);
         
-        let mut group = Group::new(1, creator, 10_000_000, 604800, 3, 1234567890);
+        let mut group = Group::new(1, creator, 10_000_000, 604800, 3, 2, 1234567890);
         
         // Not complete initially
         assert!(!group.is_complete());
         
         // Set status to Completed directly
-        group.status = Status::Completed;
+        group.status = GroupStatus::Completed;
         
         // Now is_complete returns true
         assert!(group.is_complete());
@@ -600,7 +581,7 @@ mod tests {
         let env = Env::default();
         let creator = Address::generate(&env);
         
-        let mut group = Group::new(1, creator, 10_000_000, 604800, 3, 1234567890);
+        let mut group = Group::new(1, creator, 10_000_000, 604800, 3, 2, 1234567890);
         
         // Advance through all cycles
         group.advance_cycle(&env); // cycle 1
@@ -609,7 +590,7 @@ mod tests {
         
         // Verify group is complete
         assert!(group.is_complete());
-        assert_eq!(group.status, Status::Completed);
+        assert_eq!(group.status, GroupStatus::Completed);
         assert!(!group.is_active);
     }
 

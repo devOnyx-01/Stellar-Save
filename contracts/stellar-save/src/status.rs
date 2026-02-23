@@ -1,4 +1,4 @@
-﻿use soroban_sdk::contracterror;
+﻿use soroban_sdk::{contracterror, contracttype};
 
 /// Error types for invalid state transitions.
 #[contracterror]
@@ -29,6 +29,7 @@ pub enum StatusError {
 ///                v
 ///            Cancelled
 /// ```
+#[contracttype]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum GroupStatus {
