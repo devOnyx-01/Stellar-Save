@@ -478,6 +478,66 @@ impl StellarSaveContract {
         Ok(contributions)
     }
 
+    /// Gets all contributions for a specific cycle in a group.
+    /// 
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `group_id` - ID of the group
+    /// * `cycle_number` - The cycle number to query
+    /// 
+    /// # Returns
+    /// Returns a vector of ContributionRecord objects for all members who contributed in the cycle.
+    /// Returns empty vector if no contributions found for the cycle.
+    /// 
+    /// # Errors
+    /// Returns StellarSaveError::GroupNotFound if the group doesn't exist.
+    /// 
+    /// # Notes
+    /// - Only returns contributions that actually exist (members who contributed)
+    /// - Does not include members who skipped the cycle
+    /// - Useful for cycle completion verification and payout calculations
+    pub fn get_cycle_contributions(
+        env: Env,
+        group_id: u64,
+        cycle_number: u32,
+    ) -> Result<Vec<ContributionRecord>, StellarSaveError> {
+        // 1. Verify group exists
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        let group = env.storage()
+            .persistent()
+            .get::<_, Group>(&group_key)
+            .ok_or(StellarSaveError::GroupNotFound)?;
+
+        // 2. Get the list of members in the group
+        let members_key = StorageKeyBuilder::group_members(group_id);
+        let members: Vec<Address> = env.storage()
+            .persistent()
+            .get(&members_key)
+            .unwrap_or(Vec::new(&env));
+
+        // 3. Initialize result vector
+        let mut contributions = Vec::new(&env);
+
+        // 4. Query each member's contribution for this cycle
+        for member in members.iter() {
+            let contrib_key = StorageKeyBuilder::contribution_individual(
+                group_id,
+                cycle_number,
+                member.clone()
+            );
+
+            // Get contribution record if it exists
+            if let Some(contrib_record) = env.storage()
+                .persistent()
+                .get::<_, ContributionRecord>(&contrib_key)
+            {
+                contributions.push_back(contrib_record);
+            }
+        }
+
+        Ok(contributions)
+    }
+
     /// Activates a group once minimum members have joined.
     /// 
     /// # Arguments
@@ -1118,5 +1178,281 @@ mod tests {
         assert_eq!(history.len(), 2); // Only cycles 2 and 3
         assert_eq!(history.get(0).unwrap().cycle_number, 2);
         assert_eq!(history.get(1).unwrap().cycle_number, 3);
+    }
+
+    #[test]
+    fn test_get_cycle_contributions_empty() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let creator = Address::generate(&env);
+
+        // Create a group
+        let group_id = 1;
+        let group = Group::new(group_id, creator.clone(), 100, 3600, 5, 2, 12345);
+        env.storage().persistent().set(&StorageKeyBuilder::group_data(group_id), &group);
+
+        // No members added, so no contributions
+        let contributions = client.get_cycle_contributions(&group_id, &0);
+        assert_eq!(contributions.len(), 0);
+    }
+
+    #[test]
+    fn test_get_cycle_contributions_single_member() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let member = Address::generate(&env);
+
+        // Create a group
+        let group_id = 1;
+        let contribution_amount = 10_000_000; // 1 XLM
+        let group = Group::new(group_id, member.clone(), contribution_amount, 3600, 5, 2, 12345);
+        env.storage().persistent().set(&StorageKeyBuilder::group_data(group_id), &group);
+
+        // Add member to group members list
+        let mut members = Vec::new(&env);
+        members.push_back(member.clone());
+        env.storage().persistent().set(&StorageKeyBuilder::group_members(group_id), &members);
+
+        // Add contribution for cycle 0
+        let contrib = ContributionRecord::new(
+            member.clone(),
+            group_id,
+            0,
+            contribution_amount,
+            12345,
+        );
+        let contrib_key = StorageKeyBuilder::contribution_individual(group_id, 0, member.clone());
+        env.storage().persistent().set(&contrib_key, &contrib);
+
+        // Get cycle contributions
+        let contributions = client.get_cycle_contributions(&group_id, &0);
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions.get(0).unwrap().member_address, member);
+        assert_eq!(contributions.get(0).unwrap().amount, contribution_amount);
+    }
+
+    #[test]
+    fn test_get_cycle_contributions_multiple_members() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let creator = Address::generate(&env);
+        let member1 = Address::generate(&env);
+        let member2 = Address::generate(&env);
+        let member3 = Address::generate(&env);
+
+        // Create a group
+        let group_id = 1;
+        let contribution_amount = 10_000_000; // 1 XLM
+        let group = Group::new(group_id, creator.clone(), contribution_amount, 3600, 5, 2, 12345);
+        env.storage().persistent().set(&StorageKeyBuilder::group_data(group_id), &group);
+
+        // Add members to group members list
+        let mut members = Vec::new(&env);
+        members.push_back(member1.clone());
+        members.push_back(member2.clone());
+        members.push_back(member3.clone());
+        env.storage().persistent().set(&StorageKeyBuilder::group_members(group_id), &members);
+
+        // Add contributions for all members in cycle 0
+        for member in [&member1, &member2, &member3].iter() {
+            let contrib = ContributionRecord::new(
+                (*member).clone(),
+                group_id,
+                0,
+                contribution_amount,
+                12345,
+            );
+            let contrib_key = StorageKeyBuilder::contribution_individual(group_id, 0, (*member).clone());
+            env.storage().persistent().set(&contrib_key, &contrib);
+        }
+
+        // Get cycle contributions
+        let contributions = client.get_cycle_contributions(&group_id, &0);
+        assert_eq!(contributions.len(), 3);
+        
+        // Verify all members are present
+        let addresses: soroban_sdk::Vec<Address> = contributions.iter()
+            .map(|c| c.member_address.clone())
+            .collect();
+        assert!(addresses.contains(&member1));
+        assert!(addresses.contains(&member2));
+        assert!(addresses.contains(&member3));
+    }
+
+    #[test]
+    fn test_get_cycle_contributions_partial_members() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let creator = Address::generate(&env);
+        let member1 = Address::generate(&env);
+        let member2 = Address::generate(&env);
+        let member3 = Address::generate(&env);
+
+        // Create a group
+        let group_id = 1;
+        let contribution_amount = 10_000_000; // 1 XLM
+        let group = Group::new(group_id, creator.clone(), contribution_amount, 3600, 5, 2, 12345);
+        env.storage().persistent().set(&StorageKeyBuilder::group_data(group_id), &group);
+
+        // Add members to group members list
+        let mut members = Vec::new(&env);
+        members.push_back(member1.clone());
+        members.push_back(member2.clone());
+        members.push_back(member3.clone());
+        env.storage().persistent().set(&StorageKeyBuilder::group_members(group_id), &members);
+
+        // Only member1 and member3 contributed (member2 skipped)
+        for member in [&member1, &member3].iter() {
+            let contrib = ContributionRecord::new(
+                (*member).clone(),
+                group_id,
+                0,
+                contribution_amount,
+                12345,
+            );
+            let contrib_key = StorageKeyBuilder::contribution_individual(group_id, 0, (*member).clone());
+            env.storage().persistent().set(&contrib_key, &contrib);
+        }
+
+        // Get cycle contributions
+        let contributions = client.get_cycle_contributions(&group_id, &0);
+        assert_eq!(contributions.len(), 2); // Only 2 contributed
+        
+        // Verify only contributing members are present
+        let addresses: soroban_sdk::Vec<Address> = contributions.iter()
+            .map(|c| c.member_address.clone())
+            .collect();
+        assert!(addresses.contains(&member1));
+        assert!(!addresses.contains(&member2)); // Did not contribute
+        assert!(addresses.contains(&member3));
+    }
+
+    #[test]
+    fn test_get_cycle_contributions_different_cycles() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let member1 = Address::generate(&env);
+        let member2 = Address::generate(&env);
+
+        // Create a group
+        let group_id = 1;
+        let contribution_amount = 10_000_000; // 1 XLM
+        let mut group = Group::new(group_id, member1.clone(), contribution_amount, 3600, 5, 2, 12345);
+        group.current_cycle = 2;
+        env.storage().persistent().set(&StorageKeyBuilder::group_data(group_id), &group);
+
+        // Add members to group members list
+        let mut members = Vec::new(&env);
+        members.push_back(member1.clone());
+        members.push_back(member2.clone());
+        env.storage().persistent().set(&StorageKeyBuilder::group_members(group_id), &members);
+
+        // Add contributions for different cycles
+        // Cycle 0: both members
+        for member in [&member1, &member2].iter() {
+            let contrib = ContributionRecord::new(
+                (*member).clone(),
+                group_id,
+                0,
+                contribution_amount,
+                12345,
+            );
+            let contrib_key = StorageKeyBuilder::contribution_individual(group_id, 0, (*member).clone());
+            env.storage().persistent().set(&contrib_key, &contrib);
+        }
+
+        // Cycle 1: only member1
+        let contrib = ContributionRecord::new(
+            member1.clone(),
+            group_id,
+            1,
+            contribution_amount,
+            12345 + 3600,
+        );
+        let contrib_key = StorageKeyBuilder::contribution_individual(group_id, 1, member1.clone());
+        env.storage().persistent().set(&contrib_key, &contrib);
+
+        // Cycle 2: only member2
+        let contrib = ContributionRecord::new(
+            member2.clone(),
+            group_id,
+            2,
+            contribution_amount,
+            12345 + 7200,
+        );
+        let contrib_key = StorageKeyBuilder::contribution_individual(group_id, 2, member2.clone());
+        env.storage().persistent().set(&contrib_key, &contrib);
+
+        // Get contributions for each cycle
+        let cycle0 = client.get_cycle_contributions(&group_id, &0);
+        assert_eq!(cycle0.len(), 2);
+
+        let cycle1 = client.get_cycle_contributions(&group_id, &1);
+        assert_eq!(cycle1.len(), 1);
+        assert_eq!(cycle1.get(0).unwrap().member_address, member1);
+
+        let cycle2 = client.get_cycle_contributions(&group_id, &2);
+        assert_eq!(cycle2.len(), 1);
+        assert_eq!(cycle2.get(0).unwrap().member_address, member2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Status(ContractError(1001))")] // 1001 is GroupNotFound
+    fn test_get_cycle_contributions_group_not_found() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        // Try to get contributions for a non-existent group
+        client.get_cycle_contributions(&999, &0);
+    }
+
+    #[test]
+    fn test_get_cycle_contributions_verify_amounts() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let member1 = Address::generate(&env);
+        let member2 = Address::generate(&env);
+
+        // Create a group
+        let group_id = 1;
+        let contribution_amount = 10_000_000; // 1 XLM
+        let group = Group::new(group_id, member1.clone(), contribution_amount, 3600, 5, 2, 12345);
+        env.storage().persistent().set(&StorageKeyBuilder::group_data(group_id), &group);
+
+        // Add members to group members list
+        let mut members = Vec::new(&env);
+        members.push_back(member1.clone());
+        members.push_back(member2.clone());
+        env.storage().persistent().set(&StorageKeyBuilder::group_members(group_id), &members);
+
+        // Add contributions with same amount
+        for member in [&member1, &member2].iter() {
+            let contrib = ContributionRecord::new(
+                (*member).clone(),
+                group_id,
+                0,
+                contribution_amount,
+                12345,
+            );
+            let contrib_key = StorageKeyBuilder::contribution_individual(group_id, 0, (*member).clone());
+            env.storage().persistent().set(&contrib_key, &contrib);
+        }
+
+        // Get cycle contributions and verify amounts
+        let contributions = client.get_cycle_contributions(&group_id, &0);
+        assert_eq!(contributions.len(), 2);
+        
+        // Calculate total
+        let total: i128 = contributions.iter()
+            .map(|c| c.amount)
+            .fold(0i128, |acc, amt| acc + amt);
+        assert_eq!(total, contribution_amount * 2);
     }
 }
