@@ -662,6 +662,26 @@ impl StellarSaveContract {
         Ok(contributions)
     }
 
+    /// Checks if a member has contributed for a specific cycle.
+    /// 
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `group_id` - ID of the group
+    /// * `cycle_number` - The cycle number to check
+    /// * `member` - Address of the member
+    /// 
+    /// # Returns
+    /// * `bool` - true if member has contributed, false otherwise
+    pub fn has_contributed(
+        env: Env,
+        group_id: u64,
+        cycle_number: u32,
+        member: Address,
+    ) -> bool {
+        let key = StorageKeyBuilder::contribution_individual(group_id, cycle_number, member);
+        env.storage().persistent().has(&key)
+    }
+
     /// Allows a user to join an existing savings group.
     /// 
     /// Users can join groups that are in Pending status (not yet activated).
@@ -2099,4 +2119,146 @@ mod tests {
         let final_group: Group = env.storage().persistent().get(&group_key).unwrap();
         assert_eq!(final_group.member_count, 4);
     }
+
+    #[test]
+    fn test_has_contributed_true() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let member = Address::generate(&env);
+        let group_id = 1;
+        let cycle = 0;
+        
+        // Setup: Create a contribution record
+        let contribution = ContributionRecord::new(member.clone(), group_id, cycle, 100, 1000);
+        let key = StorageKeyBuilder::contribution_individual(group_id, cycle, member.clone());
+        env.storage().persistent().set(&key, &contribution);
+        
+        // Action: Check if member has contributed
+        let has_contributed = client.has_contributed(&group_id, &cycle, &member);
+        
+        // Verify: Returns true
+        assert_eq!(has_contributed, true);
+    }
+
+    #[test]
+    fn test_has_contributed_false() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let member = Address::generate(&env);
+        let group_id = 1;
+        let cycle = 0;
+        
+        // Setup: No contribution record exists
+        
+        // Action: Check if member has contributed
+        let has_contributed = client.has_contributed(&group_id, &cycle, &member);
+        
+        // Verify: Returns false
+        assert_eq!(has_contributed, false);
+    }
+
+    #[test]
+    fn test_has_contributed_different_members() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let member1 = Address::generate(&env);
+        let member2 = Address::generate(&env);
+        let group_id = 1;
+        let cycle = 0;
+        
+        // Setup: Only member1 has contributed
+        let contribution = ContributionRecord::new(member1.clone(), group_id, cycle, 100, 1000);
+        let key = StorageKeyBuilder::contribution_individual(group_id, cycle, member1.clone());
+        env.storage().persistent().set(&key, &contribution);
+        
+        // Action: Check both members
+        let has_contributed_1 = client.has_contributed(&group_id, &cycle, &member1);
+        let has_contributed_2 = client.has_contributed(&group_id, &cycle, &member2);
+        
+        // Verify: member1 true, member2 false
+        assert_eq!(has_contributed_1, true);
+        assert_eq!(has_contributed_2, false);
+    }
+
+    #[test]
+    fn test_has_contributed_different_cycles() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let member = Address::generate(&env);
+        let group_id = 1;
+        
+        // Setup: Member contributed in cycle 0 but not cycle 1
+        let contribution = ContributionRecord::new(member.clone(), group_id, 0, 100, 1000);
+        let key = StorageKeyBuilder::contribution_individual(group_id, 0, member.clone());
+        env.storage().persistent().set(&key, &contribution);
+        
+        // Action: Check both cycles
+        let has_contributed_0 = client.has_contributed(&group_id, &0, &member);
+        let has_contributed_1 = client.has_contributed(&group_id, &1, &member);
+        
+        // Verify: cycle 0 true, cycle 1 false
+        assert_eq!(has_contributed_0, true);
+        assert_eq!(has_contributed_1, false);
+    }
+
+    #[test]
+    fn test_has_contributed_different_groups() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let member = Address::generate(&env);
+        let cycle = 0;
+        
+        // Setup: Member contributed in group 1 but not group 2
+        let contribution = ContributionRecord::new(member.clone(), 1, cycle, 100, 1000);
+        let key = StorageKeyBuilder::contribution_individual(1, cycle, member.clone());
+        env.storage().persistent().set(&key, &contribution);
+        
+        // Action: Check both groups
+        let has_contributed_1 = client.has_contributed(&1, &cycle, &member);
+        let has_contributed_2 = client.has_contributed(&2, &cycle, &member);
+        
+        // Verify: group 1 true, group 2 false
+        assert_eq!(has_contributed_1, true);
+        assert_eq!(has_contributed_2, false);
+    }
+
+    #[test]
+    fn test_has_contributed_multiple_cycles() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, StellarSaveContract);
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        
+        let member = Address::generate(&env);
+        let group_id = 1;
+        
+        // Setup: Member contributed in cycles 0, 1, and 3 (but not 2)
+        for cycle in [0u32, 1u32, 3u32] {
+            let contribution = ContributionRecord::new(member.clone(), group_id, cycle, 100, 1000);
+            let key = StorageKeyBuilder::contribution_individual(group_id, cycle, member.clone());
+            env.storage().persistent().set(&key, &contribution);
+        }
+        
+        // Action: Check all cycles
+        let has_0 = client.has_contributed(&group_id, &0, &member);
+        let has_1 = client.has_contributed(&group_id, &1, &member);
+        let has_2 = client.has_contributed(&group_id, &2, &member);
+        let has_3 = client.has_contributed(&group_id, &3, &member);
+        
+        // Verify: cycles 0, 1, 3 true; cycle 2 false
+        assert_eq!(has_0, true);
+        assert_eq!(has_1, true);
+        assert_eq!(has_2, false);
+        assert_eq!(has_3, true);
+    }
 }
+
