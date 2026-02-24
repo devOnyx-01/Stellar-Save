@@ -46,3 +46,23 @@ export interface MemberCardData {
   hasReceivedPayout: boolean
   status: MemberStatus
 }
+
+export type PayoutStatus = 'completed' | 'next' | 'upcoming'
+
+export interface PayoutEntry {
+  position: number
+  memberAddress: string
+  memberName?: string
+  estimatedDate: Date
+  amount: number
+  status: PayoutStatus
+  txHash?: string
+  paidAt?: Date
+}
+
+export interface PayoutQueueData {
+  cycleId: number
+  totalMembers: number
+  entries: PayoutEntry[]
+  currentUserAddress?: string
+}
