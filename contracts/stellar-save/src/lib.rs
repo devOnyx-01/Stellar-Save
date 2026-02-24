@@ -832,23 +832,6 @@ impl StellarSaveContract {
         Ok(sorted_queue)
     }
   
-    /// Returns the number of members in a specific group.
-    /// 
-    /// # Arguments
-    /// * `group_id` - The unique identifier of the group.
-    /// 
-    /// # Returns
-    /// Returns the member count as u32, or StellarSaveError::GroupNotFound if the group doesn't exist.
-    pub fn get_member_count(env: Env, group_id: u64) -> Result<u32, StellarSaveError> {
-        let key = StorageKeyBuilder::group_data(group_id);
-        let group = env.storage()
-            .persistent()
-            .get::<_, Group>(&key)
-            .ok_or(StellarSaveError::GroupNotFound)?;
-        
-        Ok(group.member_count)
-    }
-
     /// Assigns or reassigns payout positions to members.
     /// 
     /// # Arguments
