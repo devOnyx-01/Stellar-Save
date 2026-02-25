@@ -13,6 +13,7 @@ export { NetworkIndicator } from "./NetworkIndicator";
 export { SearchBar } from "./SearchBar";
 export { Pagination } from "./Pagination";
 export { Tabs } from "./Tabs";
+export { Spinner, FullPageLoader } from "./Spinner";
 export type { Tab } from "./Tabs";
 export { GroupCard } from "./GroupCard";
 export { CreateGroupForm } from "./CreateGroupForm";
