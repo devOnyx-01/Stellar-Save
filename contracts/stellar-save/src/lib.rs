@@ -44,6 +44,10 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol, Ve
 pub use status::StatusError;
 pub use storage::{StorageKey, StorageKeyBuilder};
 
+// --- Cooldown Constants ---
+const GROUP_CREATION_COOLDOWN: u64 = 300; // 5 minutes
+const GROUP_JOIN_COOLDOWN: u64 = 120; // 2 minutes
+
 #[contract]
 pub struct StellarSaveContract;
 
@@ -259,6 +263,8 @@ impl StellarSaveContract {
         amount: i128,
         timestamp: u64,
     ) -> Result<(), StellarSaveError> {
+        Self::assert_not_paused(env)?;
+
         // 1. Check if member has already contributed in this cycle
         let contrib_key = StorageKeyBuilder::contribution_individual(
             group_id,
@@ -301,6 +307,18 @@ impl StellarSaveContract {
             .ok_or(StellarSaveError::Overflow)?;
 
         env.storage().persistent().set(&count_key, &new_count);
+
+        // 6. Update incremental group balance
+        let balance_key = StorageKeyBuilder::group_balance(group_id);
+        let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
+        let new_balance = current_balance.checked_add(amount).ok_or(StellarSaveError::Overflow)?;
+        env.storage().persistent().set(&balance_key, &new_balance);
+
+        // 7. Update member total contributions tracking
+        let member_total_key = StorageKeyBuilder::member_total_contributions(group_id, member_address.clone());
+        let member_current: i128 = env.storage().persistent().get(&member_total_key).unwrap_or(0);
+        let member_new = member_current.checked_add(amount).ok_or(StellarSaveError::Overflow)?;
+        env.storage().persistent().set(&member_total_key, &member_new);
 
         Ok(())
     }
@@ -382,6 +400,52 @@ impl StellarSaveContract {
         Ok(())
     }
 
+    /// Asserts that the contract is not paused.
+    fn assert_not_paused(env: &Env) -> Result<(), StellarSaveError> {
+        let key = StorageKeyBuilder::emergency_pause();
+        let is_paused: bool = env.storage().persistent().get(&key).unwrap_or(false);
+        if is_paused {
+            return Err(StellarSaveError::ContractPaused);
+        }
+        Ok(())
+    }
+
+    /// Pauses all critical contract operations. Only allowed for the admin.
+    pub fn pause_contract(env: Env) -> Result<(), StellarSaveError> {
+        let config_key = StorageKeyBuilder::contract_config();
+        let config = env
+            .storage()
+            .persistent()
+            .get::<_, ContractConfig>(&config_key)
+            .ok_or(StellarSaveError::InvalidState)?;
+
+        config.admin.require_auth();
+
+        let pause_key = StorageKeyBuilder::emergency_pause();
+        env.storage().persistent().set(&pause_key, &true);
+
+        EventEmitter::emit_contract_paused(&env, config.admin, env.ledger().timestamp());
+        Ok(())
+    }
+
+    /// Unpauses all critical contract operations. Only allowed for the admin.
+    pub fn unpause_contract(env: Env) -> Result<(), StellarSaveError> {
+        let config_key = StorageKeyBuilder::contract_config();
+        let config = env
+            .storage()
+            .persistent()
+            .get::<_, ContractConfig>(&config_key)
+            .ok_or(StellarSaveError::InvalidState)?;
+
+        config.admin.require_auth();
+
+        let pause_key = StorageKeyBuilder::emergency_pause();
+        env.storage().persistent().set(&pause_key, &false);
+
+        EventEmitter::emit_contract_unpaused(&env, config.admin, env.ledger().timestamp());
+        Ok(())
+    }
+
     /// Creates a new savings group (ROSCA).
     /// Tasks: Validate parameters, Generate ID, Initialize Struct, Store Data, Emit Event.
     pub fn create_group(
@@ -391,6 +455,17 @@ impl StellarSaveContract {
         cycle_duration: u64,
         max_members: u32,
     ) -> Result<u64, StellarSaveError> {
+        Self::assert_not_paused(&env)?;
+
+        // [RATE LIMITING] Check rate limit for group creation
+        let creation_key = StorageKeyBuilder::user_last_creation(creator.clone());
+        let current_time = env.ledger().timestamp();
+        if let Some(last_creation) = env.storage().persistent().get::<_, u64>(&creation_key) {
+            if current_time < last_creation + GROUP_CREATION_COOLDOWN {
+                return Err(StellarSaveError::RateLimitExceeded);
+            }
+        }
+
         // 1. Authorization: Only the creator can initiate this transaction
         creator.require_auth();
 
@@ -442,7 +517,9 @@ impl StellarSaveContract {
         env.events()
             .publish((Symbol::new(&env, "GroupCreated"), creator), group_id);
 
-        // 7. Return Group ID
+        // 7. Update rate limit tracker and Return Group ID
+        env.storage().persistent().set(&creation_key, &current_time);
+        
         Ok(group_id)
     }
 
@@ -454,6 +531,8 @@ impl StellarSaveContract {
         new_duration: u64,
         new_max_members: u32,
     ) -> Result<(), StellarSaveError> {
+        Self::assert_not_paused(&env)?;
+
         // 1. Load existing group data
         let group_key = StorageKeyBuilder::group_data(group_id);
         let mut group = env
@@ -545,25 +624,20 @@ impl StellarSaveContract {
         group_id: u64,
         member_address: Address,
     ) -> Result<bool, StellarSaveError> {
-        // Verify the group exists and get its current cycle
-        let group_key = StorageKeyBuilder::group_data(group_id);
-        let group = env
+        let member_key = StorageKeyBuilder::member_profile(group_id, member_address.clone());
+        let profile = env
             .storage()
             .persistent()
-            .get::<_, Group>(&group_key)
-            .ok_or(StellarSaveError::GroupNotFound)?;
+            .get::<_, MemberProfile>(&member_key);
 
-        // Check each cycle from 0 to current_cycle to see if member received payout
-        for cycle in 0..=group.current_cycle {
-            let recipient_key = StorageKeyBuilder::payout_recipient(group_id, cycle);
-
+        if let Some(member_profile) = profile {
+            let recipient_key = StorageKeyBuilder::payout_recipient(group_id, member_profile.payout_position);
             if let Some(recipient) = env.storage().persistent().get::<_, Address>(&recipient_key) {
                 if recipient == member_address {
                     return Ok(true);
                 }
             }
         }
-
         Ok(false)
     }
 
@@ -688,27 +762,14 @@ impl StellarSaveContract {
     /// * `Err(StellarSaveError::GroupNotFound)` - If group doesn't exist
     pub fn get_total_paid_out(env: Env, group_id: u64) -> Result<i128, StellarSaveError> {
         let group_key = StorageKeyBuilder::group_data(group_id);
-        let group = env
+        let _group = env
             .storage()
             .persistent()
             .get::<_, Group>(&group_key)
             .ok_or(StellarSaveError::GroupNotFound)?;
 
-        let mut total: i128 = 0;
-
-        for cycle in 0..group.current_cycle {
-            let payout_key = StorageKeyBuilder::payout_record(group_id, cycle);
-
-            if let Some(payout_record) = env
-                .storage()
-                .persistent()
-                .get::<_, PayoutRecord>(&payout_key)
-            {
-                total = total
-                    .checked_add(payout_record.amount)
-                    .ok_or(StellarSaveError::Overflow)?;
-            }
-        }
+        let total_key = StorageKeyBuilder::group_total_paid_out(group_id);
+        let total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
 
         Ok(total)
     }
@@ -728,43 +789,14 @@ impl StellarSaveContract {
     /// * `Err(StellarSaveError::Overflow)` - If calculation overflows
     pub fn get_group_balance(env: Env, group_id: u64) -> Result<i128, StellarSaveError> {
         let group_key = StorageKeyBuilder::group_data(group_id);
-        let group = env
+        let _group = env
             .storage()
             .persistent()
             .get::<_, Group>(&group_key)
             .ok_or(StellarSaveError::GroupNotFound)?;
 
-        let mut total_contributions: i128 = 0;
-        let mut total_payouts: i128 = 0;
-
-        // Sum all contributions across all cycles
-        for cycle in 0..=group.current_cycle {
-            let total_key = StorageKeyBuilder::contribution_cycle_total(group_id, cycle);
-            if let Some(cycle_total) = env.storage().persistent().get::<_, i128>(&total_key) {
-                total_contributions = total_contributions
-                    .checked_add(cycle_total)
-                    .ok_or(StellarSaveError::Overflow)?;
-            }
-        }
-
-        // Sum all payouts
-        for cycle in 0..group.current_cycle {
-            let payout_key = StorageKeyBuilder::payout_record(group_id, cycle);
-            if let Some(payout_record) = env
-                .storage()
-                .persistent()
-                .get::<_, PayoutRecord>(&payout_key)
-            {
-                total_payouts = total_payouts
-                    .checked_add(payout_record.amount)
-                    .ok_or(StellarSaveError::Overflow)?;
-            }
-        }
-
-        // Calculate balance
-        let balance = total_contributions
-            .checked_sub(total_payouts)
-            .ok_or(StellarSaveError::Overflow)?;
+        let balance_key = StorageKeyBuilder::group_balance(group_id);
+        let balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
 
         Ok(balance)
     }
@@ -1089,6 +1121,8 @@ impl StellarSaveContract {
         caller: Address,
         mode: AssignmentMode,
     ) -> Result<(), StellarSaveError> {
+        Self::assert_not_paused(&env)?;
+
         caller.require_auth();
 
         let group_key = StorageKeyBuilder::group_data(group_id);
@@ -1193,6 +1227,8 @@ impl StellarSaveContract {
         amount: i128,
         cycle_number: u32,
     ) -> Result<(), StellarSaveError> {
+        Self::assert_not_paused(&env)?;
+
         // 1. Validate recipient address
         if recipient == Address::default() {
             return Err(StellarSaveError::InvalidRecipient);
@@ -1287,6 +1323,17 @@ impl StellarSaveContract {
 
         // 10. Clear reentrancy protection flag
         env.storage().persistent().set(&reentrancy_key, &0);
+
+        // 10.5 Update incremental group balance and total paid out
+        let balance_key = StorageKeyBuilder::group_balance(group_id);
+        let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
+        let new_balance = current_balance.checked_sub(amount).ok_or(StellarSaveError::Overflow)?;
+        env.storage().persistent().set(&balance_key, &new_balance);
+
+        let paid_out_key = StorageKeyBuilder::group_total_paid_out(group_id);
+        let current_paid_out: i128 = env.storage().persistent().get(&paid_out_key).unwrap_or(0);
+        let new_paid_out = current_paid_out.checked_add(amount).ok_or(StellarSaveError::Overflow)?;
+        env.storage().persistent().set(&paid_out_key, &new_paid_out);
 
         // 11. Emit payout event
         EventEmitter::emit_payout_executed(&env, group_id, recipient, amount, cycle_number, timestamp);
@@ -1445,31 +1492,15 @@ impl StellarSaveContract {
     ) -> Result<i128, StellarSaveError> {
         // 1. Verify group exists
         let group_key = StorageKeyBuilder::group_data(group_id);
-        let group = env
+        let _group = env
             .storage()
             .persistent()
             .get::<_, Group>(&group_key)
             .ok_or(StellarSaveError::GroupNotFound)?;
 
-        // 2. Iterate through all cycles and sum contributions
-        let mut total: i128 = 0;
-
-        // Iterate from cycle 0 to current_cycle (inclusive)
-        for cycle in 0..=group.current_cycle {
-            let contrib_key =
-                StorageKeyBuilder::contribution_individual(group_id, cycle, member.clone());
-
-            // Get contribution record if it exists
-            if let Some(contrib_record) = env
-                .storage()
-                .persistent()
-                .get::<_, ContributionRecord>(&contrib_key)
-            {
-                total = total
-                    .checked_add(contrib_record.amount)
-                    .ok_or(StellarSaveError::Overflow)?;
-            }
-        }
+        // 2. Lookup total from incrementally tracked storage
+        let total_key = StorageKeyBuilder::member_total_contributions(group_id, member);
+        let total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
 
         Ok(total)
     }
@@ -1856,8 +1887,19 @@ impl StellarSaveContract {
     /// contract.join_group(env, 1, member_address)?;
     /// ```
     pub fn join_group(env: Env, group_id: u64, member: Address) -> Result<(), StellarSaveError> {
+        Self::assert_not_paused(&env)?;
+
         // Verify caller authorization
         member.require_auth();
+
+        // [RATE LIMITING] Check rate limit for group joining
+        let join_key = StorageKeyBuilder::user_last_join(member.clone());
+        let current_time = env.ledger().timestamp();
+        if let Some(last_join) = env.storage().persistent().get::<_, u64>(&join_key) {
+            if current_time < last_join + GROUP_JOIN_COOLDOWN {
+                return Err(StellarSaveError::RateLimitExceeded);
+            }
+        }
 
         // Task 1: Verify group exists and is joinable
         let group_key = StorageKeyBuilder::group_data(group_id);
@@ -1926,6 +1968,9 @@ impl StellarSaveContract {
         group.member_count += 1;
         env.storage().persistent().set(&group_key, &group);
 
+        // Update rate limit tracker
+        env.storage().persistent().set(&join_key, &current_time);
+
         // Emit event
         EventEmitter::emit_member_joined(&env, group_id, member, group.member_count, timestamp);
 
@@ -1951,6 +1996,8 @@ impl StellarSaveContract {
         group_id: u64,
         member: Address,
     ) -> Result<(), StellarSaveError> {
+        Self::assert_not_paused(&env)?;
+
         member.require_auth();
 
         let group_key = StorageKeyBuilder::group_data(group_id);
@@ -2240,6 +2287,8 @@ fn test_get_total_groups() {
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
+    use proptest::prelude::*;
+
 
     #[test]
     fn test_get_group_success() {
@@ -7936,5 +7985,208 @@ mod tests {
         // This should fail due to overflow in amount calculation
         let result = client.try_transfer_payout(&group_id, &creator, &i128::MAX, &0);
         assert_eq!(result, Err(Ok(StellarSaveError::Overflow)));
+    }
+
+    #[test]
+    fn test_pause_unpause_success() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 10,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        // Pause the contract
+        client.pause_contract();
+
+        let creator = Address::generate(&env);
+        // Operation should fail due to pause
+        let result = client.try_create_group(&creator, &100, &3600, &5);
+        assert_eq!(result, Err(Ok(StellarSaveError::ContractPaused)));
+
+        // Unpause the contract
+        client.unpause_contract();
+
+        // Operation should succeed
+        client.create_group(&creator, &100, &3600, &5);
+    }
+
+    #[test]
+    fn test_group_creation_rate_limit() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 10,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        let creator = Address::generate(&env);
+
+        // First creation should succeed
+        client.create_group(&creator, &100, &3600, &5);
+
+        // Immediate second creation should fail due to cooldown
+        let result = client.try_create_group(&creator, &100, &3600, &5);
+        assert_eq!(result, Err(Ok(StellarSaveError::RateLimitExceeded)));
+        
+        // Different user should be able to create independent of the other user's cooldown
+        let creator2 = Address::generate(&env);
+        client.create_group(&creator2, &100, &3600, &5);
+    }
+
+    #[test]
+    fn test_group_join_rate_limit() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 10,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        let creator = Address::generate(&env);
+        let member = Address::generate(&env);
+
+        let group_id1 = client.create_group(&creator, &100, &3600, &5);
+        
+        let creator2 = Address::generate(&env);
+        let group_id2 = client.create_group(&creator2, &100, &3600, &5);
+
+        // First join should succeed
+        client.join_group(&group_id1, &member);
+
+        // Immediate second join to another group should fail
+        let result = client.try_join_group(&group_id2, &member);
+        assert_eq!(result, Err(Ok(StellarSaveError::RateLimitExceeded)));
+    }
+
+    // --- Fuzz Tests ---
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(50))]
+        
+        #[test]
+        fn test_fuzz_create_group(
+            amount in 0..2000i128,
+            duration in 0..100000u64,
+            members in 0..20u32
+        ) {
+            let env = Env::default();
+            let admin = Address::generate(&env);
+            let contract_id = env.register(StellarSaveContract, ());
+            let client = StellarSaveContractClient::new(&env, &contract_id);
+
+            let config = ContractConfig {
+                admin: admin.clone(),
+                min_contribution: 10,
+                max_contribution: 1000,
+                min_members: 2,
+                max_members: 10,
+                min_cycle_duration: 3600,
+                max_cycle_duration: 86400,
+            };
+
+            env.mock_all_auths();
+            client.update_config(&config);
+
+            let creator = Address::generate(&env);
+            let result = client.try_create_group(&creator, &amount, &duration, &members);
+
+            // Invariant: If inputs are within config bounds, it should succeed (or rate limit if same creator)
+            let within_bounds = amount >= config.min_contribution && 
+                               amount <= config.max_contribution &&
+                               duration >= config.min_cycle_duration &&
+                               duration <= config.max_cycle_duration &&
+                               members >= config.min_members &&
+                               members <= config.max_members;
+
+            match result {
+                Ok(_) => assert!(within_bounds, "Should not succeed if outside bounds"),
+                Err(Ok(StellarSaveError::InvalidState)) => assert!(!within_bounds, "Should not return InvalidState if within bounds"),
+                Err(Ok(err)) => {
+                    // Other errors like RateLimitExceeded are acceptable in this flow
+                     match err {
+                        StellarSaveError::RateLimitExceeded => (),
+                        _ => panic!("Unexpected error: {:?}", err),
+                     }
+                },
+                Err(e) => panic!("Fuzz test failed with unexpected error types: {:?}", e),
+            }
+        }
+
+        #[test]
+        fn test_fuzz_join_group(
+            group_id_input in 0..100u64
+        ) {
+            let env = Env::default();
+            let admin = Address::generate(&env);
+            let contract_id = env.register(StellarSaveContract, ());
+            let client = StellarSaveContractClient::new(&env, &contract_id);
+
+            let config = ContractConfig {
+                admin: admin.clone(),
+                min_contribution: 10,
+                max_contribution: 1000,
+                min_members: 2,
+                max_members: 10,
+                min_cycle_duration: 3600,
+                max_cycle_duration: 86400,
+            };
+
+            env.mock_all_auths();
+            client.update_config(&config);
+
+            let creator = Address::generate(&env);
+            let created_id = client.create_group(&creator, &100, &3600, &5);
+
+            let member = Address::generate(&env);
+            let result = client.try_join_group(&group_id_input, &member);
+
+            match result {
+                Ok(_) => assert_eq!(group_id_input, created_id),
+                Err(Ok(StellarSaveError::GroupNotFound)) => assert_ne!(group_id_input, created_id),
+                Err(Ok(StellarSaveError::RateLimitExceeded)) => (), // Possible if same member joins repeatedly
+                Err(Ok(err)) => {
+                     // Ensure no panics/crashes for random IDs
+                     match err {
+                        StellarSaveError::InvalidState | StellarSaveError::AlreadyMember | StellarSaveError::GroupFull => (),
+                        _ => panic!("Unexpected join error: {:?}", err),
+                     }
+                },
+                _ => ()
+            }
+        }
     }
 }
