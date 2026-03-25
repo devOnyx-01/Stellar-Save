@@ -296,6 +296,17 @@ impl StellarSaveContract {
     ) -> Result<(), StellarSaveError> {
         Self::assert_not_paused(env)?;
 
+        // Reentrancy protection - prevent recursive calls during contribution processing
+        let reentrancy_key = StorageKeyBuilder::reentrancy_guard();
+        let guard_value: u64 = env.storage().persistent().get(&reentrancy_key).unwrap_or(0);
+        
+        if guard_value != 0 {
+            return Err(StellarSaveError::InternalError);
+        }
+        
+        // Set reentrancy protection flag
+        env.storage().persistent().set(&reentrancy_key, &1);
+
         // 1. Check if member has already contributed in this cycle
         let contrib_key = StorageKeyBuilder::contribution_individual(
             group_id,
@@ -350,6 +361,10 @@ impl StellarSaveContract {
         let member_current: i128 = env.storage().persistent().get(&member_total_key).unwrap_or(0);
         let member_new = member_current.checked_add(amount).ok_or(StellarSaveError::Overflow)?;
         env.storage().persistent().set(&member_total_key, &member_new);
+
+        // Clear reentrancy protection flag
+        let reentrancy_key = StorageKeyBuilder::reentrancy_guard();
+        env.storage().persistent().set(&reentrancy_key, &0);
 
         Ok(())
     }
@@ -2271,6 +2286,39 @@ impl StellarSaveContract {
         env.storage().persistent().set(&status_key, &true);
 
         Ok(())
+    }
+
+    /// Verifies if a transaction was signed by the specified address.
+    ///
+    /// This function can be used to verify signatures for future use cases
+    /// where additional signature verification is needed beyond Soroban's
+    /// built-in `require_auth()`. It returns a boolean indicating whether
+    /// the signature is valid.
+    ///
+    /// Note: Currently, Soroban's `require_auth()` handles authentication.
+    /// This function is provided for future extensibility and can be used
+    /// when custom signature schemes are required.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment
+    /// * `address` - The address to verify
+    ///
+    /// # Returns
+    /// * `bool` - Always returns true since Soroban handles auth internally.
+    ///            In future with custom signatures, this would return actual verification result.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let is_valid = StellarSaveContract::verify_signature(&env, user_address);
+    /// ```
+    pub fn verify_signature(env: Env, address: Address) -> bool {
+        // Soroban's require_auth() handles signature verification internally.
+        // This function is a placeholder for future custom signature verification.
+        // For now, we just require auth which validates the signature.
+        address.require_auth();
+
+        // If we reach here, the signature is valid
+        true
     }
 }
 
@@ -5273,6 +5321,37 @@ mod tests {
         let total_key = StorageKeyBuilder::contribution_cycle_total(group_id, cycle);
         let total: i128 = env.storage().persistent().get(&total_key).unwrap();
         assert_eq!(total, amount);
+    }
+
+    #[test]
+    fn test_record_contribution_reentrancy_protection() {
+        let env = Env::default();
+        let contract_id = env.register(StellarSaveContract, ());
+
+        let member = Address::generate(&env);
+        let group_id = 1;
+        let cycle = 0;
+        let amount = 100_000i128;
+        let timestamp = 12345u64;
+
+        // Manually set reentrancy guard to simulate active operation
+        let reentrancy_key = StorageKeyBuilder::reentrancy_guard();
+        env.storage().persistent().set(&reentrancy_key, &1);
+
+        // Action: Try to record contribution while guard is active
+        let result = env.as_contract(&contract_id, || {
+            StellarSaveContract::record_contribution(
+                &env,
+                group_id,
+                cycle,
+                member.clone(),
+                amount,
+                timestamp,
+            )
+        });
+
+        // Verify: Should fail with InternalError due to reentrancy guard
+        assert_eq!(result, Err(StellarSaveError::InternalError));
     }
 
     // Tests for get_contribution_deadline function
@@ -8530,6 +8609,35 @@ mod tests {
         }
     }
 
+    // ============================================================
+    // Signature Verification Tests
+    // ============================================================
+
+    #[test]
+    fn test_verify_signature_with_valid_address() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let address = Address::generate(&env);
+
+        // Verify signature should succeed with valid address
+        let result = client.verify_signature(&address);
+        assert_eq!(result, true);
+    }
+
+    #[test]
+    #[should_panic(expected = "requires auth")]
+    fn test_verify_signature_without_auth() {
+        let env = Env::default();
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+        let address = Address::generate(&env);
+
+        // Without calling mock_all_auths(), this should panic due to require_auth
+        let _ = client.verify_signature(&address);
+    }
+}
     // Tests for validate_max_members function
 
     #[test]
