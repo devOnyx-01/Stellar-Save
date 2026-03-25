@@ -218,6 +218,36 @@ impl StellarSaveContract {
         Ok(())
     }
 
+    /// Validates that a max_members value is within the allowed range.
+    ///
+    /// Checks the provided value against the contract's configured
+    /// minimum and maximum member limits.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment for storage access
+    /// * `max_members` - The max_members value to validate
+    ///
+    /// # Returns
+    /// * `Ok(())` - The value is valid (or no config is stored)
+    /// * `Err(StellarSaveError::InvalidState)` - Value is outside allowed range
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Validate a max_members of 10
+    /// StellarSaveContract::validate_max_members(&env, 10)?;
+    /// ```
+    pub fn validate_max_members(env: &Env, max_members: u32) -> Result<(), StellarSaveError> {
+        let config_key = StorageKeyBuilder::contract_config();
+
+        if let Some(config) = env.storage().persistent().get::<_, ContractConfig>(&config_key) {
+            if max_members < config.min_members || max_members > config.max_members {
+                return Err(StellarSaveError::InvalidState);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Records a contribution in storage and updates member statistics.
     ///
     /// This is an internal helper function that handles all the storage operations
@@ -479,14 +509,13 @@ impl StellarSaveContract {
         {
             if contribution_amount < config.min_contribution
                 || contribution_amount > config.max_contribution
-                || max_members < config.min_members
-                || max_members > config.max_members
                 || cycle_duration < config.min_cycle_duration
                 || cycle_duration > config.max_cycle_duration
             {
                 return Err(StellarSaveError::InvalidState);
             }
         }
+        Self::validate_max_members(&env, max_members)?;
 
         // 3. Generate unique group ID
         let group_id = Self::generate_next_group_id(&env)?;
@@ -566,14 +595,13 @@ impl StellarSaveContract {
         {
             if new_contribution < config.min_contribution
                 || new_contribution > config.max_contribution
-                || new_max_members < config.min_members
-                || new_max_members > config.max_members
                 || new_duration < config.min_cycle_duration
                 || new_duration > config.max_cycle_duration
             {
                 return Err(StellarSaveError::InvalidState);
             }
         }
+        Self::validate_max_members(&env, new_max_members)?;
 
         // 5. Task: Update storage
         group.contribution_amount = new_contribution;
@@ -8189,5 +8217,152 @@ mod tests {
                 _ => ()
             }
         }
+    }
+
+    // Tests for validate_max_members function
+
+    #[test]
+    fn test_validate_max_members_at_min_boundary() {
+        // Requirement 4.1: Ok(()) when max_members == config.min_members
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+
+        let config = ContractConfig {
+            admin,
+            min_contribution: 1_000_000,
+            max_contribution: 1_000_000_000,
+            min_members: 5,
+            max_members: 50,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 2592000,
+        };
+        env.storage()
+            .persistent()
+            .set(&StorageKeyBuilder::contract_config(), &config);
+
+        let result = env.as_contract(&contract_id, || {
+            StellarSaveContract::validate_max_members(&env, 5)
+        });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_max_members_at_max_boundary() {
+        // Requirement 4.2: Ok(()) when max_members == config.max_members
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+
+        let config = ContractConfig {
+            admin,
+            min_contribution: 1_000_000,
+            max_contribution: 1_000_000_000,
+            min_members: 5,
+            max_members: 50,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 2592000,
+        };
+        env.storage()
+            .persistent()
+            .set(&StorageKeyBuilder::contract_config(), &config);
+
+        let result = env.as_contract(&contract_id, || {
+            StellarSaveContract::validate_max_members(&env, 50)
+        });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_max_members_in_range() {
+        // Requirement 4.3: Ok(()) when min < max_members < max
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+
+        let config = ContractConfig {
+            admin,
+            min_contribution: 1_000_000,
+            max_contribution: 1_000_000_000,
+            min_members: 5,
+            max_members: 50,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 2592000,
+        };
+        env.storage()
+            .persistent()
+            .set(&StorageKeyBuilder::contract_config(), &config);
+
+        let result = env.as_contract(&contract_id, || {
+            StellarSaveContract::validate_max_members(&env, 25)
+        });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_max_members_below_min() {
+        // Requirement 4.4: Err(InvalidState) when max_members < config.min_members
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+
+        let config = ContractConfig {
+            admin,
+            min_contribution: 1_000_000,
+            max_contribution: 1_000_000_000,
+            min_members: 5,
+            max_members: 50,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 2592000,
+        };
+        env.storage()
+            .persistent()
+            .set(&StorageKeyBuilder::contract_config(), &config);
+
+        let result = env.as_contract(&contract_id, || {
+            StellarSaveContract::validate_max_members(&env, 4)
+        });
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StellarSaveError::InvalidState);
+    }
+
+    #[test]
+    fn test_validate_max_members_above_max() {
+        // Requirement 4.5: Err(InvalidState) when max_members > config.max_members
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+
+        let config = ContractConfig {
+            admin,
+            min_contribution: 1_000_000,
+            max_contribution: 1_000_000_000,
+            min_members: 5,
+            max_members: 50,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 2592000,
+        };
+        env.storage()
+            .persistent()
+            .set(&StorageKeyBuilder::contract_config(), &config);
+
+        let result = env.as_contract(&contract_id, || {
+            StellarSaveContract::validate_max_members(&env, 51)
+        });
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StellarSaveError::InvalidState);
+    }
+
+    #[test]
+    fn test_validate_max_members_no_config() {
+        // Requirement 4.6: Ok(()) when no ContractConfig is stored (permissive default)
+        let env = Env::default();
+        let contract_id = env.register(StellarSaveContract, ());
+
+        // No config stored — storage is empty
+        let result = env.as_contract(&contract_id, || {
+            StellarSaveContract::validate_max_members(&env, 10)
+        });
+        assert!(result.is_ok());
     }
 }
