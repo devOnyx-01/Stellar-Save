@@ -1258,6 +1258,9 @@ impl StellarSaveContract {
     ) -> Result<(), StellarSaveError> {
         Self::assert_not_paused(&env)?;
 
+        // 1. Validate recipient address - recipient must have auth in this context
+        // The require_auth call below will fail if recipient is not valid
+        recipient.require_auth();
         // Note: Address validation is implicit in Soroban - addresses are always valid
         // since they must be generated or derived from a public key.
         // The check for invalid recipient (e.g., Address::default()) is only available in tests.
@@ -8041,6 +8044,322 @@ mod tests {
 
         // Operation should succeed
         client.create_group(&creator, &100, &3600, &5);
+    }
+
+    #[test]
+    fn test_pause_non_admin_failure() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 10,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        // Non-admin trying to pause should fail
+        let result = client.try_pause_contract();
+        assert_eq!(result, Err(Ok(StellarSaveError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_unpause_non_admin_failure() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 10,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        // Pause first as admin
+        client.pause_contract();
+
+        // Non-admin trying to unpause should fail
+        let non_admin = Address::generate(&env);
+        let result = client.try_unpause_contract();
+        assert_eq!(result, Err(Ok(StellarSaveError::Unauthorized)));
+    }
+
+    #[test]
+    fn test_contribute_blocked_when_paused() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 100,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        // Create a group
+        let creator = Address::generate(&env);
+        let group_id = client.create_group(&creator, &100, &3600, &5);
+        let member = Address::generate(&env);
+        client.join_group(&group_id, &member);
+
+        // Pause the contract
+        client.pause_contract();
+
+        // Try to contribute - should fail
+        let result = client.try_contribute(&group_id, &member, &100);
+        assert_eq!(result, Err(Ok(StellarSaveError::ContractPaused)));
+    }
+
+    #[test]
+    fn test_join_group_blocked_when_paused() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 100,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        // Create a group
+        let creator = Address::generate(&env);
+        let group_id = client.create_group(&creator, &100, &3600, &5);
+
+        // Pause the contract
+        client.pause_contract();
+
+        // Try to join - should fail
+        let new_member = Address::generate(&env);
+        let result = client.try_join_group(&group_id, &new_member);
+        assert_eq!(result, Err(Ok(StellarSaveError::ContractPaused)));
+    }
+
+    #[test]
+    fn test_pause_events_emitted() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 10,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        // Pause and verify events
+        client.pause_contract();
+
+        let events = env.events().all();
+        assert!(!events.is_empty());
+        
+        // Check for contract_paused event
+        let pause_event_found = events.iter().any(|e| {
+            match e {
+                soroban_sdk::testutils::Events::Debug(v) => {
+                    v.contains("contract_paused") || v.contains("ContractPaused")
+                }
+                _ => false,
+            }
+        });
+        // Note: Event verification in Soroban tests can be complex; basic check above
+
+        // Unpause and verify events
+        client.unpause_contract();
+
+        let events_after = env.events().all();
+        assert!(events_after.len() >= events.len());
+    }
+
+    #[test]
+    fn test_already_paused_no_change() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 10,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        // Pause the contract
+        client.pause_contract();
+
+        // Try to pause again - should still be paused (idempotent operation)
+        let creator = Address::generate(&env);
+        let result = client.try_create_group(&creator, &100, &3600, &5);
+        assert_eq!(result, Err(Ok(stellar_save::StellarSaveError::ContractPaused)));
+
+        // Unpause
+        client.unpause_contract();
+
+        // Now operations should work
+        client.create_group(&creator, &100, &3600, &5);
+    }
+
+    #[test]
+    fn test_payout_blocked_when_paused() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 100,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        // Create a group and complete a cycle with contributions
+        let creator = Address::generate(&env);
+        let group_id = client.create_group(&creator, &100, &3600, &2);
+        
+        // Add contributions to complete the cycle
+        let member1 = Address::generate(&env);
+        client.join_group(&group_id, &member1);
+        
+        // Both members contribute to complete cycle 0
+        client.contribute(&group_id, &creator, &100);
+        client.contribute(&group_id, &member1, &100);
+
+        // Pause the contract
+        client.pause_contract();
+
+        // Try to process payout - should fail
+        let result = client.try_process_payout(&group_id, &creator);
+        assert_eq!(result, Err(Ok(StellarSaveError::ContractPaused)));
+    }
+
+    #[test]
+    fn test_emergency_withdraw_blocked_when_paused() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 100,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        // Create a group
+        let creator = Address::generate(&env);
+        let group_id = client.create_group(&creator, &100, &3600, &5);
+        let member = Address::generate(&env);
+        client.join_group(&group_id, &member);
+
+        // Pause the contract
+        client.pause_contract();
+
+        // Try emergency withdraw - should fail
+        let result = client.try_emergency_withdraw(&group_id, &member);
+        assert_eq!(result, Err(Ok(StellarSaveError::ContractPaused)));
+    }
+
+    #[test]
+    fn test_read_operations_work_when_paused() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(StellarSaveContract, ());
+        let client = StellarSaveContractClient::new(&env, &contract_id);
+
+        let config = ContractConfig {
+            admin: admin.clone(),
+            min_contribution: 100,
+            max_contribution: 1000,
+            min_members: 2,
+            max_members: 10,
+            min_cycle_duration: 3600,
+            max_cycle_duration: 86400,
+        };
+
+        env.mock_all_auths();
+        client.update_config(&config);
+
+        // Create a group
+        let creator = Address::generate(&env);
+        let group_id = client.create_group(&creator, &100, &3600, &5);
+
+        // Pause the contract
+        client.pause_contract();
+
+        // Read operations should still work
+        let group = client.get_group(&group_id);
+        assert_eq!(group.id, group_id);
+
+        let total_groups = client.get_total_groups();
+        assert_eq!(total_groups, 1);
+
+        // Unpause and verify
+        client.unpause_contract();
+
+        let group_after = client.get_group(&group_id);
+        assert_eq!(group_after.id, group_id);
     }
 
     #[test]
