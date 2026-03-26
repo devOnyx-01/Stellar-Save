@@ -1,15 +1,14 @@
-# Issue #365: [Frontend/Util] Create errorHandler utility
+# Stellar-Save Issue #364: Create calculateCycleProgress utility
 
-Current branch: blackboxai/issue-365-errorhandler
+## Progress Tracker
+- [x] 1. Checkout `blackboxai/issue-364-cycle-progress` ✅
+- [x] 2. Create `utils/cycleProgress.ts` ✅
+- [x] 3. Create `utils/index.ts` ✅
+- [x] 4. Refactor `CycleProgress.tsx` ✅
+- [x] 5. Add `test/cycleProgress.test.ts` ✅
+- [ ] 6. Commit changes
+- [ ] 7. Push branch
+- [ ] 8. Create PR
 
-## Steps:
-- [x] Checkout new branch
-- [x] Create frontend/src/utils/errorHandler.ts 
-- [x] Update frontend/src/test/utils.test.ts with tests
-- [ ] Run tests: cd frontend && npm test
-- [ ] Commit
-- [ ] Create PR
+**Code complete!** Ready for commit/push/PR.
 
-**Progress: 3/6 complete**
-
-**Note:** npm install running in background to setup vitest.
