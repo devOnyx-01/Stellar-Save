@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Badge } from './Badge';
+import { calculateCycleProgressFromDeadline, type CycleProgressResult } from '../utils';
 import './CycleProgress.css';
 
 export interface CycleProgressProps {
@@ -12,6 +13,8 @@ export interface CycleProgressProps {
   status?: 'active' | 'completed' | 'pending';
 }
 
+type CycleProgressType = CycleProgressResult;
+
 export function CycleProgress({
   cycleNumber,
   deadline,
@@ -21,25 +24,14 @@ export function CycleProgress({
   currentAmount = 0,
   status = 'active',
 }: CycleProgressProps) {
-  const timeRemaining = useMemo(() => {
-    const now = new Date();
-    const diff = deadline.getTime() - now.getTime();
-    
-    if (diff <= 0) return 'Ended';
-    
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    
-    if (days > 0) return `${days}d ${hours}h`;
-    if (hours > 0) return `${hours}h`;
-    
-    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-    return `${minutes}m`;
-  }, [deadline]);
+  const cycleProgress = useMemo((): CycleProgressType => {
+    return calculateCycleProgressFromDeadline(deadline, contributedCount, totalMembers);
+  }, [deadline, contributedCount, totalMembers]);
 
-  const contributionProgress = (contributedCount / totalMembers) * 100;
+  const timeRemaining = cycleProgress.timeRemaining ?? 'Ended';
+  const contributionProgress = cycleProgress.contributionProgress;
   const amountProgress = (currentAmount / targetAmount) * 100;
-  const isOverdue = new Date() > deadline;
+  const isOverdue = cycleProgress.isOverdue;
 
   return (
     <div className={`cycle-progress cycle-progress--${status}`}>
@@ -99,9 +91,9 @@ export function CycleProgress({
         </div>
       </div>
 
-      {contributionProgress === 100 && (
+      {cycleProgress.isComplete && (
         <div className="cycle-progress-complete">
-          ✓ All members have contributed
+          ✓ Cycle complete
         </div>
       )}
     </div>
