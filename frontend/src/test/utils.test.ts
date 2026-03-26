@@ -1,18 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
-import { errorHandler, formatErrorMessage } from '../utils/errorHandler';
-import type { ParsedError } from '../utils/errorHandler';
+import { describe, it, expect } from 'vitest';
 
-// Keep existing util
 function formatAmount(amount: number): string {
   return `${amount} XLM`;
 }
 
 describe('Utils', () => {
-  describe('formatAmount', () => {
-    it('formats amount correctly', () => {
-      expect(formatAmount(100)).toBe('100 XLM');
-      expect(formatAmount(0)).toBe('0 XLM');
-    });
+  it('formats amount correctly', () => {
+    expect(formatAmount(100)).toBe('100 XLM');
+    expect(formatAmount(0)).toBe('0 XLM');
   });
 
   describe('errorHandler', () => {
@@ -75,3 +70,4 @@ describe('Utils', () => {
   });
 });
 
+});
