@@ -1,5 +1,5 @@
-use soroban_sdk::{contracttype, Address};
 use core::fmt;
+use soroban_sdk::{contracttype, Address};
 
 /// Represents the lifecycle states of a savings group.
 ///
@@ -47,7 +47,7 @@ impl GroupStatus {
         if self == new_status {
             return true;
         }
-        
+
         match (self, new_status) {
             // From Pending
             (GroupStatus::Pending, GroupStatus::Active) => true,
@@ -100,7 +100,7 @@ impl fmt::Display for GroupStatus {
     }
 }
 /// Core Group data structure representing a rotational savings group (ROSCA).
-/// 
+///
 /// A Group manages the configuration and state of a savings circle where members
 /// contribute a fixed amount each cycle and take turns receiving the pooled funds.
 #[contracttype]
@@ -151,7 +151,7 @@ pub struct Group {
 
 impl Group {
     /// Creates a new Group with validation.
-    /// 
+    ///
     /// # Arguments
     /// * `id` - Unique group identifier
     /// * `creator` - Address of the group creator
@@ -159,7 +159,7 @@ impl Group {
     /// * `cycle_duration` - Duration of each cycle in seconds
     /// * `max_members` - Maximum number of members allowed
     /// * `created_at` - Creation timestamp
-    /// 
+    ///
     /// # Panics
     /// Panics if validation constraints are violated:
     /// - contribution_amount must be > 0
@@ -180,16 +180,10 @@ impl Group {
         );
 
         // Validate cycle duration
-        assert!(
-            cycle_duration > 0,
-            "cycle_duration must be greater than 0"
-        );
+        assert!(cycle_duration > 0, "cycle_duration must be greater than 0");
 
         // Validate max members (minimum 2 for a meaningful ROSCA)
-        assert!(
-            max_members >= 2,
-            "max_members must be at least 2"
-        );
+        assert!(max_members >= 2, "max_members must be at least 2");
 
         Self {
             id,
@@ -211,13 +205,13 @@ impl Group {
 
     /// Advances to the next cycle.
     /// Should be called after a successful payout.
-    /// 
+    ///
     /// # Panics
     /// Panics if the group is already complete.
     pub fn advance_cycle(&mut self) {
         assert!(!self.is_complete(), "group is already complete");
         self.current_cycle += 1;
-        
+
         // Deactivate if we've reached the final cycle
         if self.is_complete() {
             self.is_active = false;
@@ -230,7 +224,7 @@ impl Group {
     }
 
     /// Reactivates the group if it's not complete.
-    /// 
+    ///
     /// # Panics
     /// Panics if attempting to reactivate a completed group.
     pub fn reactivate(&mut self) {
@@ -263,7 +257,7 @@ mod tests {
     fn test_group_creation() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         let group = Group::new(
             1,
             creator.clone(),
@@ -288,7 +282,7 @@ mod tests {
     fn test_invalid_contribution_amount() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         Group::new(1, creator, 0, 604800, 5, 1234567890);
     }
 
@@ -297,7 +291,7 @@ mod tests {
     fn test_invalid_cycle_duration() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         Group::new(1, creator, 10_000_000, 0, 5, 1234567890);
     }
 
@@ -306,7 +300,7 @@ mod tests {
     fn test_invalid_max_members() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         Group::new(1, creator, 10_000_000, 604800, 1, 1234567890);
     }
 
@@ -314,14 +308,14 @@ mod tests {
     fn test_is_complete() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         let mut group = Group::new(1, creator, 10_000_000, 604800, 3, 1234567890);
-        
+
         assert!(!group.is_complete());
-        
+
         group.current_cycle = 2;
         assert!(!group.is_complete());
-        
+
         group.current_cycle = 3;
         assert!(group.is_complete());
     }
@@ -330,20 +324,20 @@ mod tests {
     fn test_advance_cycle() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         let mut group = Group::new(1, creator, 10_000_000, 604800, 3, 1234567890);
-        
+
         assert_eq!(group.current_cycle, 0);
         assert!(group.is_active);
-        
+
         group.advance_cycle();
         assert_eq!(group.current_cycle, 1);
         assert!(group.is_active);
-        
+
         group.advance_cycle();
         assert_eq!(group.current_cycle, 2);
         assert!(group.is_active);
-        
+
         group.advance_cycle();
         assert_eq!(group.current_cycle, 3);
         assert!(!group.is_active); // Auto-deactivated when complete
@@ -354,10 +348,10 @@ mod tests {
     fn test_advance_cycle_when_complete() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         let mut group = Group::new(1, creator, 10_000_000, 604800, 2, 1234567890);
         group.current_cycle = 2;
-        
+
         group.advance_cycle(); // Should panic
     }
 
@@ -365,14 +359,14 @@ mod tests {
     fn test_deactivate_reactivate() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         let mut group = Group::new(1, creator, 10_000_000, 604800, 3, 1234567890);
-        
+
         assert!(group.is_active);
-        
+
         group.deactivate();
         assert!(!group.is_active);
-        
+
         group.reactivate();
         assert!(group.is_active);
     }
@@ -382,10 +376,10 @@ mod tests {
     fn test_reactivate_completed_group() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         let mut group = Group::new(1, creator, 10_000_000, 604800, 2, 1234567890);
         group.current_cycle = 2;
-        
+
         group.reactivate(); // Should panic
     }
 
@@ -393,9 +387,9 @@ mod tests {
     fn test_total_pool_amount() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         let group = Group::new(1, creator, 10_000_000, 604800, 5, 1234567890);
-        
+
         assert_eq!(group.total_pool_amount(), 50_000_000); // 5 XLM total
     }
 
@@ -403,7 +397,7 @@ mod tests {
     fn test_validate() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         let group = Group::new(1, creator, 10_000_000, 604800, 5, 1234567890);
         assert!(group.validate());
     }

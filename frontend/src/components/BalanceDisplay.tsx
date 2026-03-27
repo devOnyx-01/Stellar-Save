@@ -1,7 +1,7 @@
-import { useBalance } from '../hooks/useBalance';
-import { Card } from './Card';
-import { Spinner } from './Spinner';
-import './BalanceDisplay.css';
+import { useBalance } from "../hooks/useBalance";
+import { Card } from "./Card";
+import { Spinner } from "./Spinner";
+import "./BalanceDisplay.css";
 
 export interface BalanceDisplayProps {
   /**
@@ -9,13 +9,13 @@ export interface BalanceDisplayProps {
    * @default 30000
    */
   refreshInterval?: number;
-  
+
   /**
    * Whether to show all balances or just XLM
    * @default false
    */
   showAllBalances?: boolean;
-  
+
   /**
    * Custom CSS class name
    */
@@ -24,7 +24,7 @@ export interface BalanceDisplayProps {
 
 /**
  * Component to display account balance with auto-refresh
- * 
+ *
  * @example
  * ```tsx
  * <BalanceDisplay refreshInterval={30000} showAllBalances={false} />
@@ -33,7 +33,7 @@ export interface BalanceDisplayProps {
 export function BalanceDisplay({
   refreshInterval = 30000,
   showAllBalances = false,
-  className = '',
+  className = "",
 }: BalanceDisplayProps) {
   const {
     xlmBalance,
@@ -47,9 +47,9 @@ export function BalanceDisplay({
 
   // Format balance for display
   const formatBalance = (balance: string | null): string => {
-    if (!balance) return '0.00';
+    if (!balance) return "0.00";
     const num = parseFloat(balance);
-    return num.toLocaleString('en-US', {
+    return num.toLocaleString("en-US", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 7,
     });
@@ -57,11 +57,11 @@ export function BalanceDisplay({
 
   // Format timestamp
   const formatTimestamp = (date: Date | null): string => {
-    if (!date) return 'Never';
+    if (!date) return "Never";
     const now = new Date();
     const diff = now.getTime() - date.getTime();
     const seconds = Math.floor(diff / 1000);
-    
+
     if (seconds < 60) return `${seconds}s ago`;
     const minutes = Math.floor(seconds / 60);
     if (minutes < 60) return `${minutes}m ago`;
@@ -89,7 +89,9 @@ export function BalanceDisplay({
           disabled={isLoading}
           aria-label="Refresh balance"
         >
-          <span className={`balance-display__refresh-icon ${isLoading ? 'spinning' : ''}`}>
+          <span
+            className={`balance-display__refresh-icon ${isLoading ? "spinning" : ""}`}
+          >
             ↻
           </span>
         </button>
@@ -130,9 +132,9 @@ export function BalanceDisplay({
                 {allBalances.map((balance, index) => (
                   <div key={index} className="balance-display__asset">
                     <span className="balance-display__asset-code">
-                      {balance.asset_type === 'native'
-                        ? 'XLM'
-                        : balance.asset_code || 'Unknown'}
+                      {balance.asset_type === "native"
+                        ? "XLM"
+                        : balance.asset_code || "Unknown"}
                     </span>
                     <span className="balance-display__asset-balance">
                       {formatBalance(balance.balance)}
