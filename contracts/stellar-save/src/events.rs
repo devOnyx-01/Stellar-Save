@@ -77,6 +77,22 @@ pub struct GroupStatusChanged {
     pub changed_at: u64,
 }
 
+/// Event emitted when contract is paused.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractPaused {
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
+/// Event emitted when contract is unpaused.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractUnpaused {
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
 /// Utility functions for emitting events.
 pub struct EventEmitter;
 
@@ -205,6 +221,16 @@ impl EventEmitter {
             changed_at,
         };
         env.events().publish(("group_status_changed",), event);
+    }
+
+    pub fn emit_contract_paused(env: &Env, admin: Address, timestamp: u64) {
+        let event = ContractPaused { admin, timestamp };
+        env.events().publish(("contract_paused",), event);
+    }
+
+    pub fn emit_contract_unpaused(env: &Env, admin: Address, timestamp: u64) {
+        let event = ContractUnpaused { admin, timestamp };
+        env.events().publish(("contract_unpaused",), event);
     }
 }
 

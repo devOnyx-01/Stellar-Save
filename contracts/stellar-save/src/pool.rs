@@ -129,6 +129,15 @@ impl PoolCalculator {
             .ok_or(StellarSaveError::GroupNotFound)?;
 
         Ok(members.len())
+        let group_key = StorageKeyBuilder::group_data(group_id);
+
+        let group: crate::group::Group = env
+            .storage()
+            .persistent()
+            .get(&group_key)
+            .ok_or(StellarSaveError::GroupNotFound)?;
+
+        Ok(group.member_count)
     }
 
     /// Retrieves the contribution amount for a group from storage.
@@ -217,6 +226,16 @@ impl PoolCalculator {
 
         // Get contribution amount
         let contribution_amount = Self::get_contribution_amount(env, group_id)?;
+        // Get membership info from single group load
+        let group_key = StorageKeyBuilder::group_data(group_id);
+        let group: crate::group::Group = env
+            .storage()
+            .persistent()
+            .get(&group_key)
+            .ok_or(StellarSaveError::GroupNotFound)?;
+
+        let member_count = group.member_count;
+        let contribution_amount = group.contribution_amount;
 
         // Calculate total pool
         let total_pool_amount = Self::calculate_total_pool(contribution_amount, member_count)?;
