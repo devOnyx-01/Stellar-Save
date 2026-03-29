@@ -1,11 +1,30 @@
-# EventService Implementation TODO
+# Stellar Horizon API Service Implementation Plan
 
-## Plan Steps
+## Completed Steps
+- [x] Analyzed project structure and confirmed new `client/` Rust crate needed
+- [x] Created TODO.md with breakdown
 
-- [x] 2. Create frontend/src/lib/EventService.ts (Main class)
-- [x] 3. Create frontend/src/lib/index.ts (Exports)
-- [x] 4. Create useEventService hook in frontend/src/hooks/useEventService.ts
-- [x] 5. Update frontend/src/hooks/index.ts (export hook)
-- [ ] 6. Test & attempt_completion
 
-Current: Step 1 ✅, Step 2 ✅. Next: exports.
+   - Integrate as workspace member
+
+2. **Update root `Cargo.toml`**
+   - Add `client` to workspace members
+
+3. **Implement `client/src/lib.rs`**
+   - HorizonService struct
+   - get_account(), get_balances(), get_transactions()
+   - Error handling with HorizonError
+   - JSON deserialization types
+
+4. **Add example usage and tests**
+
+5. **Verify build**
+   - `cargo check`
+   - `cargo build --package client`
+
+6. **Documentation**
+   - README in `client/`
+   - Export doc tests
+
+**Current Step: Create client/Cargo.toml**
+
